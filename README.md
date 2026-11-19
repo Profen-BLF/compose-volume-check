@@ -21,6 +21,8 @@ The check exits with status `1` and reports:
 
 The volume key stays `db-data` in both files. The resolved Docker volume name changes because the project name changes. A restarted database could therefore mount a new volume while its original data remains in the old one.
 
+For an upstream example, [replay a PostgreSQL mount change in Paperless-ngx](docs/case-studies/paperless-ngx-postgres-mount.md).
+
 ## Check a deployment
 
 Before editing the deployed configuration, render it and save its mount information. Replace the script and snapshot paths with your own.
