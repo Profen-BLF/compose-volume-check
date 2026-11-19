@@ -1,0 +1,59 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest discover -s tests -p test_cli.py -v
+
+  compose-rendering:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compose-version: "2.38.2"
+            compose-sha256: 486b3ffc0f806ca2efbc430cef89955386011662f0c76bad17c103d059cfa9cf
+          - compose-version: "5.7.0"
+            compose-sha256: 7758048ad38e580f22559603312874fec8bb638d021a9e64182385fc17cc12a2
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Verify and use the pinned Compose renderer
+        shell: bash
+        env:
+          COMPOSE_VERSION: ${{ matrix.compose-version }}
+          COMPOSE_SHA256: ${{ matrix.compose-sha256 }}
+        run: |
+          renderer="$RUNNER_TEMP/docker-compose"
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' \
+            --output "$renderer" \
+            "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+          printf '%s  %s\n' "$COMPOSE_SHA256" "$renderer" | sha256sum --check -
+          chmod +x "$renderer"
+          COMPOSE_VOLUME_CHECK_TEST_COMPOSE=1 COMPOSE_VOLUME_CHECK_COMPOSE_BIN="$renderer" \
+            python -m unittest discover -s tests -p test_rendered_compose.py -v
