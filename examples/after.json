@@ -1,0 +1,12 @@
+{
+  "services": {
+    "db": {
+      "volumes": [
+        {"type": "volume", "source": "db-data", "target": "/var/lib/postgresql"}
+      ]
+    }
+  },
+  "volumes": {
+    "db-data": {"name": "demo_db-data"}
+  }
+}
