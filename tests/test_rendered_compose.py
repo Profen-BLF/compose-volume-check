@@ -101,6 +101,15 @@ class RenderedComposeCLI(unittest.TestCase):
         self.assertIn("Driver settings change", finding["detail"])
         self.assertNotIn("private-", self.baseline.read_text(encoding="utf-8") + json.dumps(report))
 
+    def test_numeric_driver_options_match_handwritten_json(self):
+        template = EXAMPLE + "    driver_opts:\n      limit: 42\n      factor: 1.0\n      offset: 1000000.0\n"
+        rendered = self.render("live", template)
+        self.snapshot(rendered)
+        candidate = json.loads(rendered)
+        candidate["volumes"]["db-data"]["driver_opts"] = {"limit": 42, "factor": 1.0, "offset": 1000000.0}
+        report = self.check_config(json.dumps(candidate), exit_code=0)
+        self.assertEqual(report["findings"], [])
+
     def test_disabling_profile_requires_review(self):
         profiled = EXAMPLE.replace("    image:", "    profiles: [database]\n    image:")
         self.snapshot(self.render("live", profiled, "--profile", "database"))

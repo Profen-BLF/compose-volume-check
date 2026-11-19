@@ -1,9 +1,13 @@
+import io
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "compose_volume_check.py"
@@ -44,6 +48,40 @@ class VolumeCheckCLI(unittest.TestCase):
 
     def check_config(self, document, *args):
         return self.cli("check", self.baseline, *args, data=document)
+
+    def test_version_is_available_without_a_subcommand(self):
+        result = self.cli("--version")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r"\b\d+\.\d+\.\d+\s*$")
+
+    def test_null_optional_fields_match_omitted_fields(self):
+        before = config()
+        before["services"]["worker"] = {}
+        self.save(before)
+
+        after = config()
+        after["services"]["worker"] = {"volumes": None, "volumes_from": None, "profiles": None}
+        after["services"]["db"]["volumes"][0]["volume"] = None
+        after["volumes"]["db-data"].update(driver=None, driver_opts=None, external=None)
+        result = self.check_config(after)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        self.save({"services": {"worker": {}}})
+        result = self.check_config({"services": {"worker": {"volumes": None}}, "volumes": None})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_null_handling_does_not_hide_invalid_field_types(self):
+        malformed = (
+            {"services": None},
+            {"services": {}, "volumes": []},
+            {"services": {"db": {"volumes": False}}},
+            {"services": {"db": {"volumes_from": ""}}},
+            {"services": {"db": {"profiles": {}}}},
+        )
+        for document in malformed:
+            with self.subTest(document=document):
+                result = self.cli("snapshot", data=document)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
     def test_resolved_volume_changes_when_project_name_changes(self):
         self.save(config())
@@ -245,6 +283,36 @@ class VolumeCheckCLI(unittest.TestCase):
         self.assertIn("Driver settings change", changed.stdout)
         self.assertNotIn("/private-", self.baseline.read_text() + changed.stdout)
 
+    def test_scalar_driver_options_match_their_string_forms(self):
+        before = config()
+        before["volumes"]["db-data"]["driver_opts"] = {
+            "limit": "42", "scale": "1.5", "factor": "1", "offset": "1e+06", "enabled": "false"
+        }
+        self.save(before)
+        after = config()
+        options = {"limit": 42, "scale": 1.5, "factor": 1.0, "offset": 1000000.0, "enabled": False}
+        after["volumes"]["db-data"]["driver_opts"] = options
+        same = self.check_config(after)
+        self.assertEqual(same.returncode, 0, same.stdout + same.stderr)
+
+        options["limit"] = 43
+        changed = self.check_config(after)
+        self.assertEqual(changed.returncode, 1, changed.stderr)
+        self.assertIn("Driver settings change", changed.stdout)
+
+    def test_non_scalar_and_non_finite_driver_options_are_rejected(self):
+        document = config()
+        options = {}
+        document["volumes"]["db-data"]["driver_opts"] = options
+        for value in (None, [], {"private": "value"}, "overflow-placeholder"):
+            with self.subTest(value=value):
+                options["option"] = value
+                encoded = json.dumps(document).replace('"overflow-placeholder"', "1e400")
+                result = self.cli("snapshot", data=encoded)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("Volume driver option values", result.stderr)
+                self.assertNotIn("private", result.stderr)
+
     def test_terminal_control_sequences_are_escaped(self):
         self.save(config(name="volume\x1b[2J\nforged message"))
         result = self.check_config(config(name="different"))
@@ -275,6 +343,31 @@ class VolumeCheckCLI(unittest.TestCase):
         self.assertEqual(self.baseline.read_bytes(), before)
         self.save(config(name="new"))
         self.assertIn(b'"new"', self.baseline.read_bytes())
+
+    def test_snapshot_reports_a_missing_output_directory_without_the_path(self):
+        destination = self.baseline.parent / "private-missing-directory" / self.baseline.name
+        result = self.cli("snapshot", "-o", destination, data=config())
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("The output directory does not exist", result.stderr)
+        self.assertNotIn("private-missing-directory", result.stderr)
+
+    def test_snapshot_permission_error_preserves_the_original_file(self):
+        self.save(config())
+        original = self.baseline.read_bytes()
+        candidate = self.baseline.with_name("candidate.json")
+        candidate.write_text(json.dumps(config(name="new")), encoding="utf-8")
+        existing_files = set(self.baseline.parent.iterdir())
+        args = [str(SCRIPT), "snapshot", str(candidate), "-o", str(self.baseline)]
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "argv", args), redirect_stderr(stderr):
+            with mock.patch("os.replace", side_effect=PermissionError("private-output-path")):
+                with self.assertRaises(SystemExit) as result:
+                    runpy.run_path(str(SCRIPT), run_name="__main__")
+        self.assertEqual(result.exception.code, 2)
+        self.assertIn("Permission denied for the output file or directory", stderr.getvalue())
+        self.assertNotIn("private-output-path", stderr.getvalue())
+        self.assertEqual(self.baseline.read_bytes(), original)
+        self.assertEqual(set(self.baseline.parent.iterdir()), existing_files)
 
     def test_size_limit_is_enforced(self):
         self.save(config())
