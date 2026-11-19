@@ -3,14 +3,18 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
 import tempfile
+from contextlib import suppress
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from pathlib import Path
 
 
+__version__ = "0.1.1"
 FORMAT = "compose-volume-check/1"
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_LABEL_LENGTH = 4096
@@ -65,6 +69,11 @@ def require_object(value, description):
     return value
 
 
+def optional_field(mapping, name, default):
+    value = mapping.get(name)
+    return default if value is None else value
+
+
 def require_label(value, description):
     if not isinstance(value, str) or not value or len(value) > MAX_LABEL_LENGTH:
         raise InputError(f"{description} must be a nonempty string of at most {MAX_LABEL_LENGTH} characters.")
@@ -115,6 +124,23 @@ def read_document(path):
     return require_object(document, "Input")
 
 
+def driver_option_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float) and math.isfinite(value):
+        # Match Compose's Go formatting for numeric options before hashing.
+        number = Decimal(repr(value)).normalize()
+        exponent = number.adjusted()
+        if number.is_zero() or -4 <= exponent < 6:
+            return format(number, "f")
+        return f"{number.scaleb(-exponent)}e{exponent:+03d}"
+    raise InputError("Volume driver option values must be strings, finite numbers, or booleans.")
+
+
 def rendered_mount(entry, volume_definitions):
     kind = require_label(entry.get("type"), "Mount type")
     if kind in NON_DATA_MOUNTS:
@@ -130,18 +156,17 @@ def rendered_mount(entry, volume_definitions):
     source = require_label(source, "Volume source")
     definition = require_object(volume_definitions.get(source), "Named volume definition")
     name = require_label(definition.get("name"), "Resolved Docker volume name")
-    options = require_object(entry.get("volume", {}), "Volume mount options")
+    options = require_object(optional_field(entry, "volume", {}), "Volume mount options")
     subpath = options.get("subpath")
     subpath_digest = None if subpath in (None, "") else fingerprint(subpath, "Volume subpath")
-    driver = require_label(definition.get("driver", "local"), "Volume driver")
-    driver_options = require_object(definition.get("driver_opts", {}), "Volume driver options")
-    if any(not isinstance(value, str) for value in driver_options.values()):
-        raise InputError("Volume driver options must have string values.")
+    driver = require_label(optional_field(definition, "driver", "local"), "Volume driver")
+    driver_options = require_object(optional_field(definition, "driver_opts", {}), "Volume driver options")
     settings_digest = None
     if driver != "local" or driver_options:
-        serialized = json.dumps([driver, driver_options], sort_keys=True, ensure_ascii=True)
+        normalized_options = {key: driver_option_text(value) for key, value in driver_options.items()}
+        serialized = json.dumps([driver, normalized_options], sort_keys=True, ensure_ascii=True)
         settings_digest = hashlib.sha256(serialized.encode("ascii")).hexdigest()
-    external = definition.get("external", False)
+    external = optional_field(definition, "external", False)
     if not isinstance(external, bool):
         raise InputError("Named volume external status must be a boolean.")
     return Mount("volume", name, subpath_digest, settings_digest, external)
@@ -149,14 +174,14 @@ def rendered_mount(entry, volume_definitions):
 
 def extract_rendered(document):
     raw_services = require_object(document.get("services"), "Compose services")
-    volume_definitions = require_object(document.get("volumes", {}), "Compose volume definitions")
+    volume_definitions = require_object(optional_field(document, "volumes", {}), "Compose volume definitions")
     services = {}
     for name, service in raw_services.items():
         require_label(name, "Service name")
         require_object(service, "Compose service")
-        entries = service.get("volumes", [])
-        inherited = service.get("volumes_from", [])
-        profiles = service.get("profiles", [])
+        entries = optional_field(service, "volumes", [])
+        inherited = optional_field(service, "volumes_from", [])
+        profiles = optional_field(service, "profiles", [])
         if not all(isinstance(value, list) for value in (entries, inherited, profiles)):
             raise InputError("Service volumes, volumes_from and profiles must be JSON arrays.")
         mounts = {}
@@ -310,13 +335,16 @@ def write_snapshot(text, destination):
             temporary_path = Path(temporary.name)
             temporary.write(text)
         os.replace(temporary_path, path)
+        temporary_path = None
     finally:
         if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     snapshot = commands.add_parser("snapshot", help="save the mount fields from a rendered Compose configuration")
     snapshot.add_argument("config", nargs="?", default="-", help="rendered JSON file, or - for stdin")
@@ -343,8 +371,16 @@ def main():
             return 2
         try:
             write_snapshot(serialized, args.output)
-        except OSError:
-            print("Could not write the snapshot.", file=sys.stderr)
+        except OSError as error:
+            if isinstance(error, FileNotFoundError):
+                detail = " The output directory does not exist."
+            elif isinstance(error, NotADirectoryError):
+                detail = " A component of the output directory is not a directory."
+            elif isinstance(error, PermissionError):
+                detail = " Permission denied for the output file or directory."
+            else:
+                detail = ""
+            print(f"Could not write the snapshot.{detail}", file=sys.stderr)
             return 2
         return 0
 
