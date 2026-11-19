@@ -6,21 +6,51 @@
 
 需要 Python 3.10 或更新版本，以及可运行 `docker compose config --format json` 的 Compose。检查器使用 Python 标准库离线读取文件或管道，运行时无需 Docker 守护进程、管理员权限或第三方 Python 包。
 
-## 在部署前检查
+## 不用 Docker 体验
 
-在准备变更前，从**当前部署使用的配置**建立快照。把下面的脚本和快照路径换成你本地的路径。
+在源码目录中，用 Python 3.10 或更新版本运行以下命令。示例使用两份合成的 Compose JSON。
 
 ```sh
-docker compose config --format json | python3 /path/to/compose_volume_check.py snapshot -o /path/to/baseline.json
+python3 compose_volume_check.py check examples/before.json examples/after.json
+```
+
+预期退出码为 `1`。Docker 卷名保留 `demo_db-data`，容器内挂载路径从 `/var/lib/postgresql/data` 改为 `/var/lib/postgresql`，因此旧路径报 `mount_missing`，新路径报 `mount_added`。[Paperless-ngx 英文案例](docs/case-studies/paperless-ngx-postgres-mount.md)复现了同类变化。
+
+## 安装
+
+在源码目录或解压后的项目目录中运行以下命令，任选一种。
+
+```sh
+pipx install .
+```
+
+```sh
+python -m pip install .
+```
+
+临时运行可以使用 `uvx`。
+
+```sh
+uvx --from . compose-volume-check --help
+```
+
+如果指定的 GitHub 版本含有 `pyproject.toml`，可以将 `.` 替换为 `git+https://github.com/Profen-BLF/compose-volume-check.git@REVISION`。用 `compose-volume-check --help` 查看命令，用 `compose-volume-check --version` 查看已安装的版本。
+
+## 在部署前检查
+
+在准备变更前，从**当前部署使用的配置**建立快照。把下面的快照路径换成你本地的路径。
+
+```sh
+docker compose config --format json | compose-volume-check snapshot -o /path/to/baseline.json
 ```
 
 准备好新版配置后，使用候选部署的实际参数执行检查。
 
 ```sh
-docker compose config --format json | python3 /path/to/compose_volume_check.py check /path/to/baseline.json
+docker compose config --format json | compose-volume-check check /path/to/baseline.json
 ```
 
-如果部署时使用了 `-f`、`-p`、`--profile` 或 `--env-file`，渲染配置时使用相应版本的同一组参数。Windows 可在 PowerShell 7 中用 `py -3` 或已安装的 `python` 代替 `python3`。已有两份渲染后的 JSON 时，可直接运行 `python3 compose_volume_check.py check before.json after.json`。加 `--format json` 可供 CI 读取。
+如果部署时使用了 `-f`、`-p`、`--profile` 或 `--env-file`，渲染配置时使用相应版本的同一组参数。已有两份渲染后的 JSON 时，可运行 `compose-volume-check check before.json after.json`。加 `--format json` 可供 CI 读取。在源码目录中也可以用 `python3 compose_volume_check.py` 执行同样的子命令，Windows 可用 `py -3 compose_volume_check.py`。
 
 | 退出码 | 含义 |
 | --- | --- |
@@ -50,7 +80,7 @@ docker compose -p new -f examples/compose.yaml config --format json | python3 co
 如果上游把服务从 `db` 改为 `postgres`，在检查时声明这次改名：
 
 ```sh
-docker compose config --format json | python3 compose_volume_check.py check baseline.json --rename-service db=postgres
+docker compose config --format json | compose-volume-check check baseline.json --rename-service db=postgres
 ```
 
 工具会按新服务名查找原挂载目标，并照常检查卷名、卷内子目录和驱动。多个服务改名时可重复传入该参数。每个旧名必须只出现在基准，每个新名只出现在候选，两端一对一对应。无效映射返回 `2`，卷变更和无法核实的挂载仍返回 `1`。JSON 报告用 `service_renames` 记录显式映射，发现项中的 `service` 沿用基准名称。
@@ -75,4 +105,4 @@ COMPOSE_VOLUME_CHECK_TEST_COMPOSE=1 python3 -m unittest discover -s tests -p tes
 
 PowerShell 7 中可先执行 `$env:COMPOSE_VOLUME_CHECK_TEST_COMPOSE = '1'`，再运行同一条 Python 命令。可选的 `COMPOSE_VOLUME_CHECK_COMPOSE_BIN` 指向独立的 Compose 可执行文件，用于复核特定版本。仓库中的 GitHub Actions 工作流覆盖 Python 3.10、3.12 和 Docker Compose 2.38.2、5.7.0。
 
-使用 [MIT 许可证](LICENSE)。
+[MIT 许可证](LICENSE) · [贡献指南](CONTRIBUTING.md) · [漏洞反馈](SECURITY.md)

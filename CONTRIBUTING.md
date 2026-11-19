@@ -2,7 +2,7 @@
 
 ## Report a missed change or false alarm
 
-Open a [GitHub issue](https://github.com/Profen-BLF/compose-volume-check/issues/new) describing the storage change you expected the checker to flag. Include your OS, Python and Docker Compose versions, the command you ran, the expected and actual findings, and the exit code.
+Open a [GitHub issue](https://github.com/Profen-BLF/compose-volume-check/issues/new) describing the storage change you expected the checker to flag. Include the checker version (`compose-volume-check --version`), your OS, Python and Docker Compose versions, the command you ran, the expected and actual findings, and the exit code.
 
 Use a small synthetic before-and-after configuration pair. Preserve the relevant mount and Compose project settings while replacing real credentials, host paths, and private identifiers with dummy values. The [Paperless-ngx replay](docs/case-studies/paperless-ngx-postgres-mount.md) shows how to document the inputs, commands, and expected results.
 

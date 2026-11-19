@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compose-volume-check"
+dynamic = ["version"]
+description = "Review storage changes between rendered Docker Compose configurations."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.scripts]
+compose-volume-check = "compose_volume_check:main"
+
+[project.urls]
+Repository = "https://github.com/Profen-BLF/compose-volume-check"
+Issues = "https://github.com/Profen-BLF/compose-volume-check/issues"
+
+[tool.setuptools]
+py-modules = ["compose_volume_check"]
+
+[tool.setuptools.dynamic]
+version = {attr = "compose_volume_check.__version__"}
